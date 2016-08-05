@@ -43,7 +43,7 @@ localizeTime = (time) ->
 
 formatTime = (time, format = daytimeFormat) ->
     m = localizeTime time
-    m.format " #{format}"
+    m.format "#{format}"
 
 calculateSomeCycle = (whenish, next = 1) ->
     start = seconds * cycle * Math.floor whenish / (cycle * seconds)
@@ -78,24 +78,31 @@ getCheckpointsRemaining = () ->
     checkpointsDone = getCheckpointsDone()
     checkpointsRemaining = checkpointsInCycle - checkpointsDone
 
-calculateMuDifference = (ours, theirs) ->
-    startCycle = calculateNextCycle 0
-    lastCheckpoint = calculateNextCheckpoint 0
-    timeElapsed = (lastCheckpoint - startCycle) / seconds
-    checkpointsDone = timeElapsed / checkpoint
-    ourScore = checkpointsDone * ours
-    theirScore = checkpointsDone * theirs
-    difference = theirScore - ourScore
-    difference = 0 if difference < 1
-    difference + 1
+calculateMuDifferenceNextCheckpoint = (ours, theirs) ->
+    ###
+    getCheckpointsDone() + 1 is to calculate the number
+    of completed checkpoints at the NEXT checkpoint
+    ###
+    checkpointsDoneAtNextCheckpoint = getCheckpointsDone() + 1
+    difference = Math.abs(theirs - ours) * checkpointsDoneAtNextCheckpoint
 
-getMuNeededNow = (ours, theirs) ->
-    calculateMuDifference ours, theirs
+getMusNeededNow = (ours, theirs) ->
+    musNeeded = calculateMuDifferenceNextCheckpoint ours, theirs
+    ###
+    Increment MUs needed by one so that score is not tied
+    ###
+    ++musNeeded
 
-getMuNeededAverage = (ours, theirs) ->
-    checkpointsRemaining = getCheckpointsRemaining()
-    difference = calculateMuDifference ours, theirs
-    Math.ceil difference / checkpointsRemaining
+getMusNeededAverage = (ours, theirs) ->
+    ###
+    getCheckpointsRemaining() - 1 is to calculate the number
+    of remaining checkpoints at the NEXT checkpoint
+    (Ensure it is at least 1 to avoid division by zero)
+    ###
+    checkpointsRemainingAtNextCheckpoint = getCheckpointsRemaining() - 1
+    checkpointsRemainingAtNextCheckpoint = 1 unless checkpointsRemainingAtNextCheckpoint > 1
+    musNeeded = getMusNeededNow ours, theirs
+    Math.ceil musNeeded / checkpointsRemainingAtNextCheckpoint
 
 module.exports = (robot) ->
   robot.respond /cycle offset/i, (msg) ->
@@ -115,14 +122,14 @@ module.exports = (robot) ->
     count = 1 unless count > 1
     times = []
     times.push getNextCycle number for number in [1..count]
-    msg.send "The next #{count} cycle(s) occur at: #{times}."
+    msg.send "The next #{count} cycle(s) occur at: #{times.join(', ')}."
 
   robot.respond /c(heck)?p(oint)?(\s+[0-9]+)?$/i, (msg) ->
     count = +msg.match[3]
     count = 1 unless count > 1
     times = []
     times.push getNextCheckpoint number for number in [1..count]
-    msg.send "The next #{count} checkpoint(s) occur at: #{times}."
+    msg.send "The next #{count} checkpoint(s) occur at: #{times.join(', ')}."
 
   robot.respond /c(heck)?p(oint)?s\s+on\s+((this|next)\s+)?([a-z]+day)/i, (msg) ->
     today = localizeTime moment()
@@ -134,7 +141,7 @@ module.exports = (robot) ->
     whenish.subtract 1, "minute"
     times = []
     times.push getSomeCheckpoint whenish, number, timeFormat for number in [1..5]
-    msg.send "The checkpoints on #{day} occur at: #{times}."
+    msg.send "The checkpoints on #{day} occur at: #{times.join(', ')}."
 
   robot.respond /c(heck)?p(oint)?s on (.*)/i, (msg) ->
     return if msg.match[3].match /day$/i
@@ -145,73 +152,80 @@ module.exports = (robot) ->
     whenish.subtract 1, "minute"
     times = []
     times.push getSomeCheckpoint whenish, number, timeFormat for number in [1..5]
-    msg.send "The checkpoints on #{day} occur at: #{times}."
+    msg.send "The checkpoints on #{day} occur at: #{times.join(', ')}."
 
   robot.respond /m(ind\s*)?u(nits?)?( needed)?\s+([0-9]+k?)\s+([0-9]+k?)/i, (msg) ->
-    ours = +msg.match[4]
-    ours = 1000 * +msg.match[4].slice 0, -1 if "k" is msg.match[4].slice -1
-    ours = 0 unless ours > 0
-    theirs = +msg.match[5]
-    theirs = 1000 * +msg.match[5].slice 0, -1 if "k" is msg.match[5].slice -1
-    theirs = 0 unless theirs > 0
-    needed = getMuNeededNow ours, theirs
-
-    if ours > theirs
-      winning = 'RES'
-      losing = 'ENL'
-    else
-      winning = 'ENL'
-      losing = 'RES'
-
     checkpointsDone = getCheckpointsDone()
     checkpointsRemaining = getCheckpointsRemaining()
     nextCheckpoint = getNextCheckpoint 1
 
+    ours = +msg.match[4]
+    ours = 1000 * +msg.match[4].slice 0, -1 if "k" is msg.match[4].slice -1
+    ours = 0 unless ours > 0
+
+    theirs = +msg.match[5]
+    theirs = 1000 * +msg.match[5].slice 0, -1 if "k" is msg.match[5].slice -1
+    theirs = 0 unless theirs > 0
+
     if checkpointsDone == 0
       summary = "No checkpoints have been completed in this cycle, please check back after #{nextCheckpoint}."
+    else if ours == theirs
+      summary = "Score is currently tied, the cycle is up for grabs. Go out and throw more fields!"
     else
+      if ours > theirs
+        winning = 'RES'
+        losing = 'ENL'
+      else
+        winning = 'ENL'
+        losing = 'RES'
+
+      needed = getMusNeededNow ours, theirs
+
       summary = "Current ENL score: #{theirs.toLocaleString()}\n" +
                 "Current RES score: #{ours.toLocaleString()}\n" +
                 "Checkpoints Done: #{checkpointsDone}\n" +
                 "Checkpoints Remaining: #{checkpointsRemaining}\n" +
                 "Next Checkpoint: #{nextCheckpoint}\n" +
                 "\n" +
-                "#{losing} needs #{needed.toLocaleString()} total MU to win the cycle in the next checkpoint, " +
+                "#{losing} needs #{needed.toLocaleString()} total MUs to win the cycle in the next checkpoint, " +
                 "assuming #{winning} score doesn't change."
 
     msg.send summary
 
   robot.respond /m(ind\s*)?u(nits?)? average\s+([0-9]+k?)\s+([0-9]+k?)/i, (msg) ->
-    ours = +msg.match[3]
-    ours = 1000 * +msg.match[3].slice 0, -1 if "k" is msg.match[3].slice -1
-    ours = 0 unless ours > 0
-    theirs = +msg.match[4]
-    theirs = 1000 * +msg.match[4].slice 0, -1 if "k" is msg.match[4].slice -1
-    theirs = 0 unless theirs > 0
-    needed = getMuNeededAverage ours, theirs
-    checkpointsRemaining = getCheckpointsRemaining()
-
-    if ours > theirs
-      winning = 'RES'
-      losing = 'ENL'
-    else
-      winning = 'ENL'
-      losing = 'RES'
-
     checkpointsDone = getCheckpointsDone()
     checkpointsRemaining = getCheckpointsRemaining()
     nextCheckpoint = getNextCheckpoint()
 
+    ours = +msg.match[3]
+    ours = 1000 * +msg.match[3].slice 0, -1 if "k" is msg.match[3].slice -1
+    ours = 0 unless ours > 0
+
+    theirs = +msg.match[4]
+    theirs = 1000 * +msg.match[4].slice 0, -1 if "k" is msg.match[4].slice -1
+    theirs = 0 unless theirs > 0
+
     if checkpointsDone == 0
       summary = "No checkpoints have been completed in this cycle, please check back after #{nextCheckpoint}."
+    else if ours == theirs
+      summary = "Score is currently tied, the cycle is up for grabs. Go out and throw more fields!"
     else
+      if ours > theirs
+        winning = 'RES'
+        losing = 'ENL'
+      else
+        winning = 'ENL'
+        losing = 'RES'
+
+      needed = getMusNeededAverage ours, theirs
+
       summary = "Current ENL score: #{theirs.toLocaleString()}\n" +
                 "Current RES score: #{ours.toLocaleString()}\n" +
                 "Checkpoints Done: #{checkpointsDone}\n" +
                 "Checkpoints Remaining: #{checkpointsRemaining}\n" +
                 "Next Checkpoint: #{nextCheckpoint}\n" +
                 "\n" +
-                "#{losing} needs #{needed.toLocaleString()} MU per checkpoint in the remaining #{checkpointsRemaining} checkpoint(s) to win the cycle, " +
+                "#{losing} needs #{needed.toLocaleString()} MUs per checkpoint in the remaining #{checkpointsRemaining} checkpoint(s) to win the cycle, " +
                 "assuming #{winning} score doesn't change."
 
     msg.send summary
